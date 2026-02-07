@@ -3,8 +3,10 @@ import logging
 import random
 import json
 import asyncio
+import threading # <--- Для запуска сервера в фоне
 from datetime import datetime, timedelta
 from collections import deque
+from flask import Flask # <--- Веб-сервер для Render
 
 import google.generativeai as genai
 from telegram import Update, constants
@@ -26,10 +28,30 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 # Кодовая фраза для принудительного запоминания
 MEMORY_TRIGGER = "!запомни" 
 
-if not TELEGRAM_BOT_TOKEN or not GEMINI_API_KEY:
-    raise ValueError("Необходимо установить TELEGRAM_BOT_TOKEN и GEMINI_API_KEY в .env файле")
+# --- БЛОК ОБМАНКИ ДЛЯ RENDER (Keep Alive) ---
+app = Flask('')
 
-genai.configure(api_key=GEMINI_API_KEY)
+@app.route('/')
+def home():
+    return "Nastya is alive. Don't bother her."
+
+def run_http_server():
+    # Render передает порт через переменную окружения PORT
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host='0.0.0.0', port=port)
+
+def keep_alive():
+    # Запускаем Flask в отдельном потоке
+    t = threading.Thread(target=run_http_server)
+    t.start()
+# ---------------------------------------------
+
+if not TELEGRAM_BOT_TOKEN or not GEMINI_API_KEY:
+    # Для локального запуска оставим warning
+    logger.warning("Токены не найдены в .env. Убедитесь, что они есть в Environment Variables!")
+
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 # --- Файл памяти ---
 MEMORY_FILE = 'nastya_memory.json'
@@ -52,30 +74,33 @@ class NastyaBrain:
         return {}
 
     def save_memory(self):
-        with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
-            json.dump(self.memory, f, ensure_ascii=False, indent=2)
+        # Внимание: На Render файловая система временная. 
+        # При перезагрузке память сотрется, если не подключить внешний диск или базу данных.
+        # Но для теста пойдет.
+        try:
+            with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
+                json.dump(self.memory, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            logger.error(f"Не удалось сохранить память: {e}")
 
     def get_user_memory(self, user_id):
         return self.memory.get(str(user_id), "Этого человека ты видишь впервые.")
 
     def update_user_memory(self, user_id, user_name, combined_summary):
-        # Сохраняем объединенное саммари
         self.memory[str(user_id)] = f"Имя: {user_name}. {combined_summary}"
         self.save_memory()
 
     def update_mood(self):
         now = datetime.now()
         
-        # Обновляем занятие для реализма
         activities = [
             "слушает грустную музыку", "делает домашку и бесится", "лежит на кровати и смотрит в потолок",
             "листает тикток", "пьет энергетик", "пытается уснуть", "играет в телефоне"
         ]
         self.current_activity = random.choice(activities)
 
-        # Логика настроения
         if 2 <= now.hour < 7:
-            self.mood_score = max(0, self.mood_score - 15) # Ночью злая/сонная
+            self.mood_score = max(0, self.mood_score - 15) # Ночью злая
         else:
             change = random.randint(-10, 15)
             self.mood_score = max(0, min(100, self.mood_score + change))
@@ -96,10 +121,22 @@ class NastyaBrain:
 brain = NastyaBrain()
 
 # --- Конфигурация модели ---
-model = genai.GenerativeModel(
-    model_name="models/gemma-3-27b-it",  # Твоя выбранная модель
-    generation_config={"temperature": 1.2, "top_p": 0.95, "max_output_tokens": 1024}
-)
+# Добавляем отключение фильтров безопасности, чтобы не ловить ошибки SAFETY
+safety_settings = [
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+]
+
+try:
+    model = genai.GenerativeModel(
+        model_name="models/gemma-3-27b-it",
+        safety_settings=safety_settings,
+        generation_config={"temperature": 1.2, "top_p": 0.95, "max_output_tokens": 1024}
+    )
+except Exception:
+    model = None
 
 conversation_history = {} # Краткосрочная память {chat_id: deque}
 
@@ -133,24 +170,23 @@ def get_system_prompt(mood_desc, user_info, is_group, recent_history_text):
 # --- Логика обработки ---
 
 async def generate_nastya_response(chat_id, user_message, user_info, is_group):
+    if not model: return "мозг не подключен..."
+    
     mood_desc = brain.get_mood_description()
     
-    # Формируем текстовую историю для модели (чтобы она видела контекст разговора)
-    # Берем последние 6 сообщений из deque
     raw_history = conversation_history.get(chat_id, deque(maxlen=10))
     history_text = "\n".join(list(raw_history))
     
-    # Добавляем текущее сообщение пользователя в "виртуальную" историю для промпта
     full_context_history = f"{history_text}\nUser: {user_message}"
     
     system_instruction = get_system_prompt(mood_desc, user_info, is_group, full_context_history)
     
+    # Gemma не поддерживает system_instruction в конфиге, поэтому шлем как user message
     messages = [{"role": "user", "parts": [system_instruction]}]
 
     try:
         response = await model.generate_content_async(messages)
         text = response.text.strip()
-        # Очистка от мусора, если модель вдруг решила добавить "Nastya:" в начало
         if text.lower().startswith("nastya:"):
             text = text[7:].strip()
         return text
@@ -159,10 +195,7 @@ async def generate_nastya_response(chat_id, user_message, user_info, is_group):
         return "чет голова болит.. позже"
 
 async def summarize_user(user_id, user_name, new_message, is_forced=False):
-    """
-    Умное обновление памяти. Читает старое, добавляет новое.
-    is_forced = True, если сработала кодовая фраза.
-    """
+    if not model: return
     try:
         current_memory = brain.get_user_memory(user_id)
         
@@ -199,12 +232,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user_message = message.text
     is_group = message.chat.type in ['group', 'supergroup']
     
-    # --- Проверка на кодовую фразу ---
     forced_memory_update = False
     if MEMORY_TRIGGER in user_message.lower():
         forced_memory_update = True
-        # Убираем кодовую фразу из сообщения, чтобы не смущать модель, или оставляем - по желанию.
-        # Лучше оставить, чтобы Настя могла среагировать типа "ладно, запомнила".
     
     # 1. Логика "Отвечать или нет"
     should_reply = False
@@ -219,23 +249,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         elif random.randint(0, 100) < (brain.mood_score / 2): 
              should_reply = True
 
-    # Если не отвечаем, но была кодовая фраза - всё равно надо сохранить в память
+    # Если не отвечаем, но была команда запомнить
     if not should_reply and forced_memory_update:
         asyncio.create_task(summarize_user(user.id, user.first_name, user_message, is_forced=True))
         return 
 
     if not should_reply:
-        # Добавляем в историю даже если не ответили, чтобы бот не терял нить разговора в группе
         if chat_id not in conversation_history:
             conversation_history[chat_id] = deque(maxlen=6)
         conversation_history[chat_id].append(f"User ({user.first_name}): {user_message}")
         return
 
     # 2. Имитация набора текста
-    typing_delay = random.uniform(1.0, 3.5) 
-    await asyncio.sleep(typing_delay * 0.3) 
     await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
-    await asyncio.sleep(typing_delay * 0.7) 
+    # Немного уменьшил задержку для отзывчивости
+    typing_delay = random.uniform(1.0, 3.0) 
+    await asyncio.sleep(typing_delay) 
 
     # 3. Ответ
     user_info = brain.get_user_memory(user.id)
@@ -246,16 +275,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     await message.reply_text(response_text)
 
-    # 4. Обновление истории диалога
+    # 4. Обновление истории
     if chat_id not in conversation_history:
         conversation_history[chat_id] = deque(maxlen=6)
     
-    # Важно: сохраняем в историю с метками, чтобы модель понимала диалог
     conversation_history[chat_id].append(f"User ({user.first_name}): {user_message}")
     conversation_history[chat_id].append(f"Nastya: {response_text}")
 
     # 5. Обновление долговременной памяти
-    # Если была кодовая фраза - обновляем 100%. Если нет - шанс 30%
     if forced_memory_update or random.random() < 0.3:
         asyncio.create_task(summarize_user(user.id, user.first_name, user_message, is_forced=forced_memory_update))
 
@@ -263,6 +290,14 @@ async def mood_update_job(context: ContextTypes.DEFAULT_TYPE):
     brain.update_mood()
 
 def main() -> None:
+    # 1. ЗАПУСКАЕМ ОБМАНКУ ПЕРЕД БОТОМ
+    keep_alive()
+
+    # 2. ЗАПУСКАЕМ БОТА
+    if not TELEGRAM_BOT_TOKEN:
+        logger.error("Нет токена бота!")
+        return
+
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
     application.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("ну привет")))
