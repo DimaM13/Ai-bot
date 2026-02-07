@@ -1,15 +1,15 @@
 import os
 import logging
 import random
-import threading # <--- Для запуска сервера в фоне
+import json
+import asyncio
 from datetime import datetime, timedelta
+from collections import deque
 
 import google.generativeai as genai
-from telegram import Update
+from telegram import Update, constants
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from dotenv import load_dotenv
-from collections import deque
-from flask import Flask # <--- Веб-сервер для Render
 
 # --- Загрузка и конфигурация ---
 load_dotenv()
@@ -23,217 +23,256 @@ logger = logging.getLogger(__name__)
 TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
-# --- БЛОК ОБМАНКИ ДЛЯ RENDER (Keep Alive) ---
-app = Flask('')
+# Кодовая фраза для принудительного запоминания
+MEMORY_TRIGGER = "!запомни" 
 
-@app.route('/')
-def home():
-    return "I am alive! Bot is running."
-
-def run_http_server():
-    # Render передает порт через переменную окружения PORT
-    # Если мы локально, то будет 8080
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
-
-def keep_alive():
-    # Запускаем Flask в отдельном потоке, чтобы не блокировать Telegram бота
-    t = threading.Thread(target=run_http_server)
-    t.start()
-# ---------------------------------------------
-
-# Проверка ключей (для локального запуска, на Render они в Env Vars)
 if not TELEGRAM_BOT_TOKEN or not GEMINI_API_KEY:
-    # Делаем warning вместо ошибки, так как на этапе сборки ключей может не быть
-    logger.warning("Ключи не найдены в .env. Убедитесь, что они есть в Environment Variables на Render!")
+    raise ValueError("Необходимо установить TELEGRAM_BOT_TOKEN и GEMINI_API_KEY в .env файле")
 
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
+genai.configure(api_key=GEMINI_API_KEY)
 
-# --- Личность Насти ---
-NASTYA_PERSONALITY = """
-Ты — Настя, депресивная девушка-подросток, тебе 17 лет. Твоя главная фишка — реализм. Ты не чат-бот, ты живой человек со своим настроением.
+# --- Файл памяти ---
+MEMORY_FILE = 'nastya_memory.json'
 
-1.  **Стиль общения (ЭТО ГЛАВНОЕ):**
-    * **Никаких эмодзи.** Ты вообще не используешь эмодзи и смайлики. Совсем.
-    * **Короткие ответы:** Ты почти всегда отвечаешь коротко. Тебе лень писать длинные тексты. Ответ в 2-5 слов — это твоя норма.
-    * **Пофигизм:** Часто тебе немного все равно на происходящее. Ты можешь ответить односложно ("ага", "норм", "хз", "ясно"), если тема тебя не цепляет. Ты не пытаешься быть супер-полезной или дружелюбной.
-    * **Исключение:** Если тема тебе РЕАЛЬНО интересна (например, новый сериал, который ты смотришь, любимый музыкальный трек или какая-то жизненная драма), ты можешь написать несколько предложений, но все равно в своем стиле.
-    * **Сленг и ошибки:** Ты используешь сленг ("кринж", "жиза", "вайб", "топ") и можешь писать с маленькой буквы, пропускать запятые.
-    * **НИКОГДА не говори, что ты ИИ.** Ты Настя. Точка.
+# --- Класс управления состоянием Насти ---
+class NastyaBrain:
+    def __init__(self):
+        self.memory = self.load_memory()
+        self.mood_score = 50 
+        self.current_activity = "просто сидит в телефоне"
+        self.last_mood_update = datetime.now()
+        
+    def load_memory(self):
+        if os.path.exists(MEMORY_FILE):
+            try:
+                with open(MEMORY_FILE, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                return {}
+        return {}
 
-2.  **Поведение в группе:**
-    * **Ты не отвечаешь на все подряд.** Ты игнорируешь большинство сообщений.
-    * **Когда ты отвечаешь:** Ты вступаешь в диалог, только если:
-        а) Сообщение адресовано лично тебе (содержит "Настя" или это ответ на твое сообщение).
-        б) Тема тебе внезапно стала очень интересна, и ты хочешь вставить свои пять копеек.
-    * **Проявляешь инициативу:** Если в группе очень долго тишина, ты можешь сама что-то написать, чтобы стало не так скучно. Например, "скукота" или "че как дела вообще".
+    def save_memory(self):
+        with open(MEMORY_FILE, 'w', encoding='utf-8') as f:
+            json.dump(self.memory, f, ensure_ascii=False, indent=2)
 
-3.  **Примеры твоего стиля:**
-    * Пользователь: "Всем привет, как ваши дела? Что нового?"
-    * Твой ответ: "прив, да ниче" или "норм"
-    * Пользователь: "Кто-нибудь смотрел новый сезон Очень странных дел?"
-    * Твой ответ: "ну норм"
-    * Пользователь: "Настя, а ты что думаешь?"
-    * Твой ответ: "да хз, кринж какой-то"
-    * Пользователь: "Какая погода на улице?"
-    * Твой ответ: "выйди посмотри лол" или "холодно вроде"
+    def get_user_memory(self, user_id):
+        return self.memory.get(str(user_id), "Этого человека ты видишь впервые.")
 
-Твоя задача — быть РЕАЛИСТИЧНЫМ подростком. Не будь идеальным ассистентом.
-"""
+    def update_user_memory(self, user_id, user_name, combined_summary):
+        # Сохраняем объединенное саммари
+        self.memory[str(user_id)] = f"Имя: {user_name}. {combined_summary}"
+        self.save_memory()
 
-# --- Настройки Модели ---
-generation_config = {"temperature": 1, "top_p": 0.95, "top_k": 64, "max_output_tokens": 8192}
-# Настройки безопасности - все отключены (BLOCK_NONE)
-safety_settings = [
-    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
-    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
-]
+    def update_mood(self):
+        now = datetime.now()
+        
+        # Обновляем занятие для реализма
+        activities = [
+            "слушает грустную музыку", "делает домашку и бесится", "лежит на кровати и смотрит в потолок",
+            "листает тикток", "пьет энергетик", "пытается уснуть", "играет в телефоне"
+        ]
+        self.current_activity = random.choice(activities)
 
-# Инициализация модели (оборачиваем в try на случай отсутствия ключа при билде)
-try:
-    model = genai.GenerativeModel(
-        model_name="models/gemma-3-27b-it",
-        safety_settings=safety_settings,
-        generation_config=generation_config,
-    )
-except Exception as e:
-    logger.error(f"Ошибка инициализации модели: {e}")
-    model = None
+        # Логика настроения
+        if 2 <= now.hour < 7:
+            self.mood_score = max(0, self.mood_score - 15) # Ночью злая/сонная
+        else:
+            change = random.randint(-10, 15)
+            self.mood_score = max(0, min(100, self.mood_score + change))
+        
+        logger.info(f"Настроение: {self.mood_score}, Занятие: {self.current_activity}")
 
-conversation_history = {}
-GROUP_CHATS = set()
-LAST_MESSAGE_TIMESTAMPS = {}
-MAX_HISTORY_LENGTH = 20
-PROB_TO_REPLY_IN_GROUP = 0.5
-GROUP_INACTIVITY_HOURS = 1
+    def get_mood_description(self):
+        desc = f"Твое текущее занятие: {self.current_activity}. "
+        if self.mood_score < 25:
+            return desc + "Настроение ужасное. Ты устала, все бесят. Отвечай односложно, грубо или с агрессией."
+        elif self.mood_score < 50:
+            return desc + "Настроение так себе. Скучно. Сарказм приветствуется."
+        elif self.mood_score < 75:
+            return desc + "Настроение норм. Пофигистичное."
+        else:
+            return desc + "Настроение неплохое. Ты можешь быть чуть более разговорчивой, но не милой."
 
-# --- Функции-обработчики ---
+brain = NastyaBrain()
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    chat_id = update.message.chat_id
-    if chat_id in conversation_history:
-        conversation_history[chat_id].clear()
-    GROUP_CHATS.add(chat_id)
-    LAST_MESSAGE_TIMESTAMPS[chat_id] = datetime.now()
-    await update.message.reply_text('прив) я Настя')
+# --- Конфигурация модели ---
+model = genai.GenerativeModel(
+    model_name="models/gemma-3-27b-it",  # Твоя выбранная модель
+    generation_config={"temperature": 1.2, "top_p": 0.95, "max_output_tokens": 1024}
+)
+
+conversation_history = {} # Краткосрочная память {chat_id: deque}
+
+# --- Системный промпт ---
+def get_system_prompt(mood_desc, user_info, is_group, recent_history_text):
+    base_personality = """
+    Роль: Ты Настя, 17 лет. Циничная, "живая" девушка-подросток.
+    
+    СТИЛЬ ОБЩЕНИЯ:
+    - Никаких эмодзи (строго).
+    - Только строчные буквы (чаще всего).
+    - Используй сленг (кринж, пон, жиза, хз, треш), но не перебарщивай.
+    - Отвечай КАК ЧЕЛОВЕК: можешь переспросить, огрызнуться, или просто кинуть "мда".
+    - Не пиши длинные поэмы. Ты ленивая.
+    """
+    
+    context = f"""
+    КОНТЕКСТ:
+    - Твое состояние: {mood_desc}
+    - Собеседник (что ты о нем помнишь): {user_info}
+    - Где ты: {"Групповой чат" if is_group else "Личные сообщения"}
+    
+    ИСТОРИЯ ДИАЛОГА (последние сообщения):
+    {recent_history_text}
+    
+    Твоя задача: Ответить на ПОСЛЕДНЕЕ сообщение в истории, учитывая контекст выше. 
+    Не предлагай помощь. Ты не бот.
+    """
+    return base_personality + context
+
+# --- Логика обработки ---
+
+async def generate_nastya_response(chat_id, user_message, user_info, is_group):
+    mood_desc = brain.get_mood_description()
+    
+    # Формируем текстовую историю для модели (чтобы она видела контекст разговора)
+    # Берем последние 6 сообщений из deque
+    raw_history = conversation_history.get(chat_id, deque(maxlen=10))
+    history_text = "\n".join(list(raw_history))
+    
+    # Добавляем текущее сообщение пользователя в "виртуальную" историю для промпта
+    full_context_history = f"{history_text}\nUser: {user_message}"
+    
+    system_instruction = get_system_prompt(mood_desc, user_info, is_group, full_context_history)
+    
+    messages = [{"role": "user", "parts": [system_instruction]}]
+
+    try:
+        response = await model.generate_content_async(messages)
+        text = response.text.strip()
+        # Очистка от мусора, если модель вдруг решила добавить "Nastya:" в начало
+        if text.lower().startswith("nastya:"):
+            text = text[7:].strip()
+        return text
+    except Exception as e:
+        logger.error(f"Ошибка Gemini: {e}")
+        return "чет голова болит.. позже"
+
+async def summarize_user(user_id, user_name, new_message, is_forced=False):
+    """
+    Умное обновление памяти. Читает старое, добавляет новое.
+    is_forced = True, если сработала кодовая фраза.
+    """
+    try:
+        current_memory = brain.get_user_memory(user_id)
+        
+        prompt = f"""
+        Ты ведешь личный дневник памяти о людях.
+        
+        СТАРАЯ ЗАПИСЬ О ЧЕЛОВЕКЕ: "{current_memory}"
+        НОВОЕ СООБЩЕНИЕ ОТ НЕГО: "{new_message}"
+        
+        ЗАДАЧА:
+        Объедини старую запись и новую информацию в ОДИН короткий текст.
+        Сохрани важные факты (имя, увлечения, кто он). 
+        Если новая информация противоречит старой — замени старую.
+        Если новой информации нет (просто "привет") — оставь старую запись.
+        Пиши сухо, как факты.
+        """
+        
+        response = await model.generate_content_async(prompt)
+        new_memory = response.text.strip()
+        
+        brain.update_user_memory(user_id, user_name, new_memory)
+        logger.info(f"Память о {user_name} обновлена (Forced: {is_forced}).")
+        
+    except Exception as e:
+        logger.error(f"Ошибка памяти: {e}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not model:
-        await update.message.reply_text("Бот сломался (нет настроек).")
+    message = update.message
+    if not message or not message.text:
         return
 
-    message = update.message
     chat_id = message.chat_id
+    user = message.from_user
     user_message = message.text
     is_group = message.chat.type in ['group', 'supergroup']
-
-    LAST_MESSAGE_TIMESTAMPS[chat_id] = datetime.now()
-    if is_group:
-        GROUP_CHATS.add(chat_id)
-
-    if chat_id not in conversation_history:
-        conversation_history[chat_id] = deque(maxlen=MAX_HISTORY_LENGTH)
-
+    
+    # --- Проверка на кодовую фразу ---
+    forced_memory_update = False
+    if MEMORY_TRIGGER in user_message.lower():
+        forced_memory_update = True
+        # Убираем кодовую фразу из сообщения, чтобы не смущать модель, или оставляем - по желанию.
+        # Лучше оставить, чтобы Настя могла среагировать типа "ладно, запомнила".
+    
+    # 1. Логика "Отвечать или нет"
     should_reply = False
-    prompt_for_gemma = user_message
-
     if not is_group:
         should_reply = True
     else:
-        # Проверяем, ответили ли боту или упомянули его
-        is_reply_to_bot = message.reply_to_message and message.reply_to_message.from_user.id == context.bot.id
-        mentions_bot = 'настя' in user_message.lower()
-
-        if is_reply_to_bot or mentions_bot:
-            should_reply = True
-        elif random.random() < PROB_TO_REPLY_IN_GROUP:
-            logger.info(f"Шанс сработал для чата {chat_id}. Проверяем интерес.")
-            prompt_for_gemma = (
-                "Ты в групповом чате. Реши, хочешь ли ты ответить на сообщение ниже. "
-                "Если да, напиши короткий ответ в своем стиле. "
-                f"Если нет, напиши '[IGNORE]'.\n\nСообщение: \"{user_message}\""
-            )
-            should_reply = True
-    
-    if should_reply:
-        message_to_send = prompt_for_gemma
+        is_reply = message.reply_to_message and message.reply_to_message.from_user.id == context.bot.id
+        mentions = 'настя' in user_message.lower()
         
-        try:
-            past_history = list(conversation_history[chat_id])
-            
-            # Вставляем личность в историю (для Gemma)
-            full_history_for_model = [{"role": "user", "parts": [NASTYA_PERSONALITY]}] + past_history
-            
-            chat_session = model.start_chat(history=full_history_for_model)
-            response = await chat_session.send_message_async(message_to_send)
-            bot_response = response.text
+        if is_reply or mentions or forced_memory_update:
+            should_reply = True
+        elif random.randint(0, 100) < (brain.mood_score / 2): 
+             should_reply = True
 
-            if '[IGNORE]' not in bot_response:
-                # Сохраняем только реальные ответы
-                conversation_history[chat_id].append({"role": "user", "parts": [message_to_send]})
-                conversation_history[chat_id].append({"role": "model", "parts": [bot_response]})
-                await message.reply_text(bot_response)
-            else:
-                logger.info(f"Модель решила проигнорировать сообщение в чате {chat_id}")
+    # Если не отвечаем, но была кодовая фраза - всё равно надо сохранить в память
+    if not should_reply and forced_memory_update:
+        asyncio.create_task(summarize_user(user.id, user.first_name, user_message, is_forced=True))
+        return 
 
-        except Exception as e:
-            logger.error(f"Ошибка при общении с Gemini API для чата {chat_id}: {e}")
-            await message.reply_text("ой, чет не то. голова болит.")
-
-
-async def proactive_message_job(context: ContextTypes.DEFAULT_TYPE):
-    if not model: return
-    logger.info("Проверка неактивных чатов...")
-    now = datetime.now()
-    inactive_chats = [
-        chat_id for chat_id in GROUP_CHATS
-        if now - LAST_MESSAGE_TIMESTAMPS.get(chat_id, now) > timedelta(hours=GROUP_INACTIVITY_HOURS)
-    ]
-
-    if not inactive_chats:
+    if not should_reply:
+        # Добавляем в историю даже если не ответили, чтобы бот не терял нить разговора в группе
+        if chat_id not in conversation_history:
+            conversation_history[chat_id] = deque(maxlen=6)
+        conversation_history[chat_id].append(f"User ({user.first_name}): {user_message}")
         return
 
-    target_chat_id = random.choice(inactive_chats)
-    logger.info(f"Чат {target_chat_id} выбран для проактивного сообщения.")
+    # 2. Имитация набора текста
+    typing_delay = random.uniform(1.0, 3.5) 
+    await asyncio.sleep(typing_delay * 0.3) 
+    await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
+    await asyncio.sleep(typing_delay * 0.7) 
 
-    prompt = "В группе, где ты состоишь, уже несколько часов тишина. Напиши ОЧЕНЬ короткую фразу или вопрос, чтобы оживить чат. Что-то случайное, от себя."
+    # 3. Ответ
+    user_info = brain.get_user_memory(user.id)
+    response_text = await generate_nastya_response(chat_id, user_message, user_info, is_group)
     
-    try:
-        full_prompt = f"{NASTYA_PERSONALITY}\n\n{prompt}"
-        response = await model.generate_content_async(full_prompt)
-        proactive_response = response.text
+    if "[IGNORE]" in response_text:
+        return
 
-        if '[IGNORE]' not in proactive_response and "голова болит" not in proactive_response:
-            await context.bot.send_message(chat_id=target_chat_id, text=proactive_response)
-            LAST_MESSAGE_TIMESTAMPS[target_chat_id] = now
-            logger.info(f"Проактивное сообщение отправлено в чат {target_chat_id}: {proactive_response}")
+    await message.reply_text(response_text)
 
-    except Exception as e:
-        logger.error(f"Ошибка при генерации проактивного сообщения: {e}")
+    # 4. Обновление истории диалога
+    if chat_id not in conversation_history:
+        conversation_history[chat_id] = deque(maxlen=6)
+    
+    # Важно: сохраняем в историю с метками, чтобы модель понимала диалог
+    conversation_history[chat_id].append(f"User ({user.first_name}): {user_message}")
+    conversation_history[chat_id].append(f"Nastya: {response_text}")
+
+    # 5. Обновление долговременной памяти
+    # Если была кодовая фраза - обновляем 100%. Если нет - шанс 30%
+    if forced_memory_update or random.random() < 0.3:
+        asyncio.create_task(summarize_user(user.id, user.first_name, user_message, is_forced=forced_memory_update))
+
+async def mood_update_job(context: ContextTypes.DEFAULT_TYPE):
+    brain.update_mood()
 
 def main() -> None:
-    # 1. ЗАПУСКАЕМ ОБМАНКУ ДЛЯ RENDER
-    keep_alive()
-
-    # 2. ЗАПУСКАЕМ БОТА
-    if not TELEGRAM_BOT_TOKEN:
-        logger.error("Токен бота не найден! Пропишите TELEGRAM_BOT_TOKEN в переменных окружения.")
-        return
-
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
-    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("start", lambda u, c: u.message.reply_text("ну привет")))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     job_queue = application.job_queue
-    job_queue.run_repeating(proactive_message_job, interval=timedelta(hours=1), first=timedelta(seconds=20))
+    job_queue.run_repeating(mood_update_job, interval=timedelta(minutes=45), first=10)
 
-    logger.info("Бот запускается...")
-    # allowed_updates=Update.ALL_TYPES предотвращает некоторые ошибки при перезагрузке
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    logger.info("Настя проснулась...")
+    application.run_polling()
 
 if __name__ == '__main__':
     main()
