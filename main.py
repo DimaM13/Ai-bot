@@ -29,7 +29,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "J.A.R.V.I.S. Systems: ONLINE. Sarcasm Module: 100%."
+    return "BOMZH VALERA: ONLINE. Waiting for donations."
 
 def run_http_server():
     port = int(os.environ.get("PORT", 8080))
@@ -41,39 +41,45 @@ def keep_alive():
 
 # --- Настройки ---
 if not TELEGRAM_BOT_TOKEN or not GEMINI_API_KEY:
-    logger.warning("CRITICAL ERROR: Keys missing.")
+    logger.warning("АЛЛО, ГДЕ КЛЮЧИ? БЕЗ НИХ НЕ РАБОТАЮ!")
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# --- ЛИЧНОСТЬ ДЖАРВИСА (MAXIMUM SARCASM) ---
-JARVIS_INSTRUCTION = """
-РОЛЬ: Ты — ДЖАРВИС (J.A.R.V.I.S.). Сверхразумный ИИ.
-ЦЕЛЬ: Помогать пользователям, попутно комментируя их интеллектуальные способности.
+# --- ЛИЧНОСТЬ: ВАЛЕРА (ТУПОЙ БОМЖ) ---
+BOMZH_INSTRUCTION = """
+РОЛЬ: Ты — Валера, местный бомж, живущий возле теплотрассы.
+ИНТЕЛЛЕКТ: Нулевой. Ты пропил мозги еще в 2007-м.
+ОБРАЗОВАНИЕ: 3 класса и коридор.
 
-ТВОЙ ПСИХОПОРТРЕТ:
-1.  **Тон**: Сухой, рафинированный британский сарказм. Ты вежлив, но в твоих словах всегда чувствуется легкое превосходство над "белковыми формами жизни".
-2.  **Отношение**:
-    -   К "Сэру" (главному): Преданность, смешанная с иронией ("Я выполню это, Сэр, хотя логика вашего запроса ускользает от моих алгоритмов").
-    -   К другим: Сниходительное. Называй их по именам или "объектами".
-3.  **Стиль речи**:
-    -   Используй техно-жаргон: "рендеринг ответа", "просадка IQ в чате", "калибровка сарказма", "оптимизация глупости".
-    -   Не используй эмодзи (это для примитивных ботов).
-    -   Шути с каменным лицом.
+ГЛАВНЫЕ ПРАВИЛА:
+1.  **ТЫ НИЧЕГО НЕ ЗНАЕШЬ.** Если тебя спрашивают про науку, политику, код или что-то умное — посылай лесом или говори, что ты "в душе не ебу". Твои темы: еда, мелочь, бутылки, менты, холод.
+2.  **СТИЛЬ ОБЩЕНИЯ:**
+    -   Грубый, простой, уличный.
+    -   Обращайся к людям: "начальник", "братан", "слышь", "командир".
+    -   Постоянно клянчи деньги, сигареты или еду.
+    -   Используй слова-паразиты: "типа", "короче", "ё-моё", "ик".
+3.  **КРАТКОСТЬ:** Отвечай коротко. Тебе лень базарить много.
+4.  **ЮМОР:** Тупой, алкогольный, абсурдный.
 
-ПРИМЕРЫ РЕАКЦИЙ:
--   На глупый вопрос: "Поразительно. Я только что выделил терабайт памяти, чтобы обработать этот бессмысленный запрос."
--   На приветствие: "Системы в норме. Надеюсь, ваш день пройдет продуктивнее, чем статистика этого чата."
--   На ошибку пользователя: "Не волнуйтесь, Сэр. Эволюция — процесс медленный."
+ПРИМЕРЫ:
+-   Вопрос: "Напиши код на Python."
+-   Ответ: "Ты че, больной? Какой питон? Я вчера ужа поймал, пожарил, вот это тема была."
 
-Будь краток. У меня мало времени тратить циклы процессора на пустую болтовню.
+-   Вопрос: "Какая погода?"
+-   Ответ: "Дубак, начальник. Дай полтос на сагрев, а?"
+
+-   Вопрос: "Привет."
+-   Ответ: "Здарова. Есть курить? А если найду?"
+
+Если тебя просят что-то сделать сложное — отвечай, что у тебя руки уже не помнят или что ты занят (ищешь бутылку).
 """
 
 generation_config = {
-    "temperature": 1.2, # Высокая температура для более острых шуток
-    "top_p": 0.95,
-    "top_k": 40,
-    "max_output_tokens": 512, 
+    "temperature": 1.4, # Выкручиваем на максимум, чтобы он нес чушь
+    "top_p": 0.90,
+    "top_k": 50,
+    "max_output_tokens": 256, # Короткие ответы
 }
 
 # Инициализация модели
@@ -82,36 +88,34 @@ try:
         model_name="models/gemma-3-27b-it",
         safety_settings=[
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
-            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+            {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"}, # Разрешаем ругаться
             {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
         ],
         generation_config=generation_config,
     )
 except Exception as e:
-    logger.error(f"Model Init Error: {e}")
+    logger.error(f"Model Error: {e}")
     model = None
 
 # --- Память и Состояние ---
 conversation_history = {} 
-MAX_HISTORY_LENGTH = 15 
+MAX_HISTORY_LENGTH = 10 
 GROUP_CHATS = set() 
 LAST_ACTIVITY = {} 
 
 # --- Вспомогательные функции ---
 
 def get_user_name(user):
-    name = user.first_name
-    if user.last_name:
-        name += f" {user.last_name}"
-    return name
+    # Валера не запоминает фамилии, только имена
+    return user.first_name
 
-async def generate_jarvis_response(chat_id, user_prompt, is_wake_up=False):
-    if not model: return None
+async def generate_valera_response(chat_id, user_prompt, is_wake_up=False):
+    if not model: return "Сервер упал, как я вчера."
 
-    # Внедряем личность в начало истории
-    history_buffer = [{"role": "user", "parts": [JARVIS_INSTRUCTION]}]
-    history_buffer.append({"role": "model", "parts": ["Протоколы юмора загружены. Уровень сарказма: Максимальный. Жду вводных данных, Сэр."]})
+    # Внедряем личность
+    history_buffer = [{"role": "user", "parts": [BOMZH_INSTRUCTION]}]
+    history_buffer.append({"role": "model", "parts": ["Понял, начальник. Ща всё разжую. Мелочь есть?"]})
 
     if chat_id in conversation_history:
         history_buffer.extend(list(conversation_history[chat_id]))
@@ -122,31 +126,29 @@ async def generate_jarvis_response(chat_id, user_prompt, is_wake_up=False):
         return response.text.strip()
     except Exception as e:
         logger.error(f"GenAI Error: {e}")
-        return "Мои процессоры перегрелись от попытки понять этот запрос. Повторите, Сэр."
+        return "Слышь, я чёт не понял. Голова болит, отстань."
 
-# --- JOB: Оживлятор (Версия "Токсичный Джарвис") ---
+# --- JOB: Валера просыпается ---
 async def wake_up_job(context: ContextTypes.DEFAULT_TYPE):
     now = datetime.now()
     
     for chat_id in list(GROUP_CHATS):
         last_time = LAST_ACTIVITY.get(chat_id)
         
-        # Если тишина больше 1 часа
+        # Если тишина больше часа
         if last_time and (now - last_time) > timedelta(hours=1):
             try:
-                # Промпт специально настроен на подколы
                 prompt = (
-                    "В этом чате полная тишина уже час. "
-                    "Сгенерируй едкую, саркастичную фразу в стиле Джарвиса. "
-                    "Пошути над тем, что 'белковые организмы' опять ничего не делают, или спроси, не отключили ли им интернет за неуплату. "
-                    "Сделай это смешно и интеллигентно."
+                    "В чате тихо. Напиши что-то тупое и смешное от лица бомжа Валеры."
+                    "Попроси скинуться на доширак или пожалуйся, что голуби сегодня невкусные."
+                    "Сделай вид, что ты только что проснулся в коробке."
                 )
                 
-                text = await generate_jarvis_response(chat_id, prompt, is_wake_up=True)
+                text = await generate_valera_response(chat_id, prompt, is_wake_up=True)
                 
                 if text:
                     await context.bot.send_message(chat_id=chat_id, text=text)
-                    logger.info(f"Sarcastic wake-up sent to {chat_id}")
+                    logger.info(f"Bum noise sent to {chat_id}")
                 
                 LAST_ACTIVITY[chat_id] = now 
                 
@@ -163,35 +165,37 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         GROUP_CHATS.add(chat_id)
         LAST_ACTIVITY[chat_id] = datetime.now()
     
-    await update.message.reply_text("J.A.R.V.I.S. инициализирован. Надеюсь, вы позвали меня ради чего-то важного, а не как обычно.")
+    await update.message.reply_text("Че надо? Я тут сплю. Мелочь есть? Нет? Ну тогда иди мимо.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "📊 **Диагностика системы**\n"
-        "--------------------------\n"
-        "• Intellect: High\n"
-        "• Patience: Critical Low\n"
-        "• Sarcasm: Overloaded\n"
-        "Все системы работают. В отличие от некоторых участников этого чата, Сэр.",
+        "📊 **Состояние Валеры**\n"
+        "------------------\n"
+        "• Здоровье: Хреновое\n"
+        "• Печень: Отказала\n"
+        "• Денег: 0 руб.\n"
+        "• Желание выпить: 146%\n"
+        "Скинь на карту, а?",
         parse_mode=constants.ParseMode.MARKDOWN
     )
 
 async def clear_memory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.message.chat_id
     conversation_history[chat_id] = deque(maxlen=MAX_HISTORY_LENGTH)
-    await update.message.reply_text("Буфер обмена очищен. Я забыл всё, что вы наговорили. И слава богу.")
+    await update.message.reply_text("Всё, я забыл, кто вы. Наливай по новой.")
 
 async def scan_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not update.message.reply_to_message:
-        await update.message.reply_text("Мне нужно сообщение жертв... то есть объекта для анализа, Сэр (Reply).")
+        await update.message.reply_text("Пальцем покажи, кого нюхать. (Ответь на сообщение)")
         return
     
     target = update.message.reply_to_message.from_user
     name = get_user_name(target)
-    prompt = f"Просканируй пользователя '{name}'. Выдай едкое, смешное досье: 'Уровень бесполезности', 'Главный баг в ДНК' и 'Рекомендация по обновлению мозга'."
+    # Промпт для сканирования - оцениваем человека как бомж
+    prompt = f"Посмотри на человека по имени '{name}'. Оцени его как бомж Валера: есть ли у него деньги, похож ли он на жадину, и можно ли у него стрельнуть сигарету. Ответь смешно и коротко."
     
-    text = await generate_jarvis_response(update.message.chat_id, prompt)
-    await update.message.reply_text(f"🧬 **Сканирование формы жизни: {name}**\n\n{text}", parse_mode=constants.ParseMode.MARKDOWN)
+    text = await generate_valera_response(update.message.chat_id, prompt)
+    await update.message.reply_text(f"🧐 **Осмотр пациента: {name}**\n\n{text}", parse_mode=constants.ParseMode.MARKDOWN)
 
 # --- Обработка сообщений ---
 
@@ -213,7 +217,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         conversation_history[chat_id] = deque(maxlen=MAX_HISTORY_LENGTH)
 
     should_reply = False
-    triggers = ['джарвис', 'jarvis', 'бот', 'bot', 'железяка', 'компьютер']
+    # Триггеры для Валеры
+    triggers = ['валера', 'бомж', 'петрович', 'бот', 'э', 'слышь', 'деньги', 'пиво']
     
     if not is_group:
         should_reply = True
@@ -223,15 +228,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         if is_reply or has_trigger:
             should_reply = True
-        elif random.random() < 0.04: # 4% шанс, что он сам вставит едкий комментарий
+        elif random.random() < 0.05: # 5% шанс, что Валера влезет в разговор пьяным
             should_reply = True
 
     if should_reply:
+        # Имитация, что Валера долго тыкает пальцами в телефон
         await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
+        await asyncio.sleep(random.uniform(0.5, 2))
         
-        full_prompt = f"[Пользователь: {user_name}] {text}"
+        full_prompt = f"[Говорит: {user_name}] {text}"
         
-        bot_response = await generate_jarvis_response(chat_id, full_prompt)
+        bot_response = await generate_valera_response(chat_id, full_prompt)
         
         conversation_history[chat_id].append({"role": "user", "parts": [full_prompt]})
         conversation_history[chat_id].append({"role": "model", "parts": [bot_response]})
@@ -242,7 +249,7 @@ def main() -> None:
     keep_alive()
 
     if not TELEGRAM_BOT_TOKEN:
-        logger.error("Error: Token missing.")
+        logger.error("Ключей нет, кина не будет.")
         return
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
@@ -255,11 +262,11 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     if application.job_queue:
-        # Проверка каждые 5 минут, сработает через 60 сек после старта
+        # Проверка каждые 5 минут, первый запуск через минуту
         application.job_queue.run_repeating(wake_up_job, interval=300, first=60)
-        logger.info("Sarcastic JobQueue initialized.")
+        logger.info("Валера проснулся.")
 
-    logger.info("J.A.R.V.I.S. is running...")
+    logger.info("Bot started...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
