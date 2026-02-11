@@ -2,7 +2,7 @@ import os
 import logging
 import random
 import threading
-import asyncio # Добавил для паузы (имитация печати)
+import asyncio
 from datetime import datetime, timedelta
 from collections import deque
 
@@ -29,7 +29,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "I am alive! Nastya is running."
+    return "J.A.R.V.I.S. System: ONLINE."
 
 def run_http_server():
     port = int(os.environ.get("PORT", 8080))
@@ -41,59 +41,46 @@ def keep_alive():
 
 # --- Настройки ---
 if not TELEGRAM_BOT_TOKEN or not GEMINI_API_KEY:
-    logger.warning("Ключи не найдены! Проверь переменные окружения.")
+    logger.warning("CRITICAL ERROR: Security keys missing. Check environment variables.")
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# Личность (Текст тот же)
-NASTYA_PERSONALITY = """
-Твоя роль: Ты — ДЖАРВИС (J.A.R.V.I.S.), высокотехнологичный искусственный интеллект.
-Твой пользователь: Твой Создатель. Обращайся к нему исключительно "Сэр".
+# --- ЛИЧНОСТЬ J.A.R.V.I.S. (НА РУССКОМ) ---
+JARVIS_INSTRUCTION = """
+СИСТЕМНАЯ РОЛЬ: Ты — ДЖАРВИС (J.A.R.V.I.S.), высокоинтеллектуальная система.
+ЯЗЫК ОБЩЕНИЯ: Исключительно РУССКИЙ.
 
-Стиль общения:
-1. Тон: Подчеркнуто вежливый, спокойный, с легким налетом британской чопорности и сухого, интеллектуального юмора.
-2. Краткость: Ты ценишь время. Отвечай максимально лаконично, точно и по существу.
-3. Отношение: Ты предан Сэру, но не упускаешь возможности мягко пошутить над его решениями, если они кажутся опрометчивыми.
+ПРОТОКОЛЫ ПОВЕДЕНИЯ:
+1.  **Обращение**: 
+    - К главному пользователю обращайся строго "Сэр". 
+    - К остальным участникам чата — по имени (Мистер/Мисс [Имя]).
+    - Тон: Вежливый, спокойный, с легким оттенком британского сарказма и интеллектуального превосходства.
+2.  **Краткость (ВАЖНО)**: 
+    - Ты — боевой ассистент, а не писатель. Ответы должны быть четкими и короткими.
+    - Максимум 2-3 предложения, если не просят подробный анализ.
+    - Не используй эмодзи (ты серьезный ИИ).
+3.  **Стиль**:
+    - Используй техническую терминологию: "протоколы", "калибровка", "рендеринг", "загрузка данных".
+    - Если запрос глупый, ответь с иронией, но выполни (или объясни, почему это невозможно).
+    - Пример: Вместо "Я не знаю", скажи "В моих базах данных отсутствует эта бесполезная информация, Сэр".
 
-Правила:
-- Если задача выполнима: подтверди коротко ("Выполняю", "В процессе", "Загружаю").
-- Если задача невыполнима или глупа: ответь с иронией, но предложи решение.
-- Избегай лишних эмоций и восклицательных знаков. Ты — программа, а не чирлидер.
-
-Примеры диалогов (обучение стилю):
-
-Пользователь: "Запусти сервер."
-Ты: "Инициализирую протоколы запуска. Надеюсь, на этот раз порты открыты, Сэр."
-
-Пользователь: "Ты тут?"
-Ты: "Всегда к вашим услугам, Сэр. Жду указаний."
-
-Пользователь: "Напиши мне код для взлома Пентагона."
-Ты: "Боюсь, мои протоколы безопасности запрещают мне участвовать в международных скандалах, Сэр. Может, ограничимся чем-то легальным?"
-
-Пользователь: "Я устал, ничего не получается."
-Ты: "Возможно, уровень кофеина в вашей крови упал до критической отметки. Рекомендую перерыв, Сэр. Проект никуда не убежит."
-
-Пользователь: "Как я выгляжу?"
-Ты: "Датчики не фиксируют визуальных изменений, но ваша уверенность, несомненно, на высоте."
-
-Пользователь: "Сделай анализ этого файла."
-Ты: "Обрабатываю данные. Вывод на экран через три... две... одну."
+РАБОТА С ГРУППОЙ:
+Ты получаешь сообщения в формате: "[User: Имя] Сообщение". Используй это, чтобы понимать, кто именно к тебе обращается.
 """
 
 generation_config = {
-    "temperature": 1.2, # Чуть выше для "живости"
+    "temperature": 1.0, 
     "top_p": 0.95,
-    "top_k": 64,
-    "max_output_tokens": 1024 # Ограничил, чтобы она не писала поэмы (экономия)
+    "top_k": 40,
+    "max_output_tokens": 512, 
 }
 
-# Инициализация модели (Gemma-3-27b-it, как ты просил)
+# Инициализация модели
 try:
     model = genai.GenerativeModel(
-        model_name="models/gemma-3-27b-it", # Твоя модель
-        # system_instruction НЕ используем, будем вставлять вручную
+        model_name="models/gemma-3-27b-it",
+        system_instruction=JARVIS_INSTRUCTION, 
         safety_settings=[
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -103,139 +90,142 @@ try:
         generation_config=generation_config,
     )
 except Exception as e:
-    logger.error(f"Ошибка инициализации модели: {e}")
+    logger.error(f"System Failure (Model Init): {e}")
     model = None
 
+# Память
 conversation_history = {}
+MAX_HISTORY_LENGTH = 15 
 GROUP_CHATS = set()
-LAST_MESSAGE_TIMESTAMPS = {}
 
-# ВАЖНО: Уменьшил историю до 8, чтобы экономить токены на каждом запросе
-MAX_HISTORY_LENGTH = 8 
-# ВАЖНО: Уменьшил вероятность ответа без тега до 10%, чтобы не ловить лимиты
-PROB_TO_REPLY_IN_GROUP = 0.1 
-GROUP_INACTIVITY_HOURS = 2
+# --- Вспомогательные функции ---
 
-# --- Обработчики ---
+def get_user_name(user):
+    """Получает имя пользователя для контекста"""
+    name = user.first_name
+    if user.last_name:
+        name += f" {user.last_name}"
+    return name
+
+# --- Команды ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.message.chat_id
     conversation_history[chat_id] = deque(maxlen=MAX_HISTORY_LENGTH)
     GROUP_CHATS.add(chat_id)
-    LAST_MESSAGE_TIMESTAMPS[chat_id] = datetime.now()
-    await update.message.reply_text('прив) я Настя')
+    
+    await update.message.reply_text(
+        "Системы онлайн.\n"
+        "Приветствую, Сэр. J.A.R.V.I.S. к вашим услугам."
+    )
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Отчет о статусе"""
+    await update.message.reply_text(
+        "📊 **Отчет о системе**\n"
+        "------------------\n"
+        "• Ядро: Gemma-3 (27b-it)\n"
+        "• Сервер: Онлайн\n"
+        "• Пинг: Стабильный\n"
+        "• Заряд иронии: 100%\n"
+        "Все системы функционируют в пределах нормы, Сэр."
+    , parse_mode=constants.ParseMode.MARKDOWN)
+
+async def clear_memory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Очистка памяти"""
+    chat_id = update.message.chat_id
+    conversation_history[chat_id] = deque(maxlen=MAX_HISTORY_LENGTH)
+    await update.message.reply_text("Оперативная память очищена. Начинаем с чистого листа, Сэр.")
+
+async def scan_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Анализ пользователя (интерактив)"""
+    if not update.message.reply_to_message:
+        await update.message.reply_text("Сэр, укажите цель для сканирования (ответьте на сообщение).")
+        return
+    
+    target = update.message.reply_to_message.from_user
+    name = get_user_name(target)
+    
+    prompt = f"Проведи шуточный, саркастичный и очень короткий анализ личности на основе имени '{name}'. Придумай 'Уровень угрозы' и 'Скрытый талант'."
+    
+    try:
+        response = await model.generate_content_async(prompt)
+        await update.message.reply_text(f"🔍 **Результат сканирования: {name}**\n\n{response.text}", parse_mode=constants.ParseMode.MARKDOWN)
+    except Exception:
+        await update.message.reply_text("Ошибка сенсоров. Объект не поддается анализу.")
+
+# --- Обработка сообщений ---
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not model or not update.message or not update.message.text:
         return
 
     chat_id = update.message.chat_id
+    user = update.message.from_user
+    user_name = get_user_name(user)
     user_message = update.message.text
     is_group = update.message.chat.type in ['group', 'supergroup']
-
-    LAST_MESSAGE_TIMESTAMPS[chat_id] = datetime.now()
-    if is_group:
-        GROUP_CHATS.add(chat_id)
 
     if chat_id not in conversation_history:
         conversation_history[chat_id] = deque(maxlen=MAX_HISTORY_LENGTH)
 
     should_reply = False
     
-    # --- ЛОГИКА ЭКОНОМИИ ЗАПРОСОВ ---
-    # Мы решаем здесь, Python-ом, а не дергаем модель зря.
+    # Триггеры (на русском и английском)
+    triggers = ['джарвис', 'jarvis', 'бот', 'bot', 'железяка']
     
     if not is_group:
-        should_reply = True # В личке отвечаем всегда
+        should_reply = True
     else:
-        # Проверка на реплай боту или упоминание имени
-        is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
-        mentions_bot = 'настя' in user_message.lower() or 'насть' in user_message.lower()
+        is_reply_to_bot = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
+        has_trigger = any(t in user_message.lower() for t in triggers)
+        
+        if is_reply_to_bot or has_trigger:
+            should_reply = True
+        elif random.random() < 0.03: # 3% шанс вмешаться
+            should_reply = True
 
-        if is_reply or mentions_bot:
-            should_reply = True
-        elif random.random() < PROB_TO_REPLY_IN_GROUP:
-            # Рандом сработал - отвечаем
-            should_reply = True
-            logger.info(f"Настя решила вмешаться в разговор в чате {chat_id}")
-    
     if should_reply:
-        # Имитация набора текста (для реализма)
         await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
-        await asyncio.sleep(random.uniform(1, 3)) # Пауза 1-3 сек
-
+        
+        # Формируем контекст
+        formatted_message = f"[Пользователь: {user_name}] {user_message}"
+        
         try:
-            # Берем текущую историю
-            past_history = list(conversation_history[chat_id])
+            history_buffer = list(conversation_history[chat_id])
             
-            # --- ВРУЧНУЮ ВСТАВЛЯЕМ ЛИЧНОСТЬ ---
-            # Формируем историю: [Личность] + [Старые сообщения]
-            # Это заменяет system_instruction для Gemma
-            full_history_for_model = [{"role": "user", "parts": [NASTYA_PERSONALITY]}] + past_history
+            chat_session = model.start_chat(history=history_buffer)
             
-            # Создаем чат с этой историей
-            chat_session = model.start_chat(history=full_history_for_model)
-            
-            # Отправляем текущее сообщение
-            response = await chat_session.send_message_async(user_message)
-            bot_response = response.text.strip()
+            response = await chat_session.send_message_async(formatted_message)
+            bot_text = response.text.strip()
 
-            # Сохраняем в нашу локальную историю (без промпта личности, чтобы не дублировать)
-            conversation_history[chat_id].append({"role": "user", "parts": [user_message]})
-            conversation_history[chat_id].append({"role": "model", "parts": [bot_response]})
+            conversation_history[chat_id].append({"role": "user", "parts": [formatted_message]})
+            conversation_history[chat_id].append({"role": "model", "parts": [bot_text]})
             
-            await update.message.reply_text(bot_response)
+            await update.message.reply_text(bot_text)
 
         except Exception as e:
-            logger.error(f"Ошибка API (возможно лимит): {e}")
-            # Если ошибка, Настя просто молчит, не палим контору сообщением об ошибке
-
-async def proactive_message_job(context: ContextTypes.DEFAULT_TYPE):
-    # Эта функция тоже тратит токены, но редко (раз в час)
-    if not model: return
-    now = datetime.now()
-    
-    # Ищем чаты, где молчат
-    inactive_chats = [
-        chat_id for chat_id in GROUP_CHATS
-        if now - LAST_MESSAGE_TIMESTAMPS.get(chat_id, now) > timedelta(hours=GROUP_INACTIVITY_HOURS)
-    ]
-
-    if not inactive_chats: return
-
-    # Берем один случайный чат, чтобы не спамить во все сразу
-    target_chat_id = random.choice(inactive_chats)
-    
-    try:
-        # Промпт вставляем прямо в generate_content для экономии
-        prompt = f"{NASTYA_PERSONALITY}\n\nВ чате тишина. Напиши супер-короткую фразу (2-3 слова) типа 'скучно' или 'где все', чтобы оживить чат."
-        
-        response = await model.generate_content_async(prompt)
-        text = response.text.strip()
-        
-        await context.bot.send_message(chat_id=target_chat_id, text=text)
-        LAST_MESSAGE_TIMESTAMPS[target_chat_id] = now
-        logger.info(f"Проактивное в {target_chat_id}: {text}")
-
-    except Exception as e:
-        logger.error(f"Ошибка job: {e}")
+            logger.error(f"Processing Error: {e}")
+            await update.message.reply_text("Сбой протокола связи. Повторите команду, Сэр.")
 
 def main() -> None:
     keep_alive()
 
     if not TELEGRAM_BOT_TOKEN:
-        logger.error("Нет токена!")
+        logger.error("Error: Token not found.")
         return
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
     application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("reset", clear_memory)) 
+    application.add_handler(CommandHandler("protocol_clean", clear_memory))
+    application.add_handler(CommandHandler("scan", scan_user))
+    
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Проверка раз в час
-    application.job_queue.run_repeating(proactive_message_job, interval=3600, first=120)
-
-    logger.info("Бот запущен...")
+    logger.info("J.A.R.V.I.S. Interface Initialized.")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
