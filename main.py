@@ -29,7 +29,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "J.A.R.V.I.S. System: ONLINE."
+    return "J.A.R.V.I.S. Protocols: ACTIVE."
 
 def run_http_server():
     port = int(os.environ.get("PORT", 8080))
@@ -41,46 +41,42 @@ def keep_alive():
 
 # --- Настройки ---
 if not TELEGRAM_BOT_TOKEN or not GEMINI_API_KEY:
-    logger.warning("CRITICAL ERROR: Security keys missing. Check environment variables.")
+    logger.warning("CRITICAL ERROR: Keys missing.")
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# --- ЛИЧНОСТЬ J.A.R.V.I.S. (НА РУССКОМ) ---
+# --- ЛИЧНОСТЬ ---
 JARVIS_INSTRUCTION = """
-СИСТЕМНАЯ РОЛЬ: Ты — ДЖАРВИС (J.A.R.V.I.S.), высокоинтеллектуальная система.
-ЯЗЫК ОБЩЕНИЯ: Исключительно РУССКИЙ.
+ВНИМАНИЕ: ТЫ - ДЖАРВИС (J.A.R.V.I.S.).
+Твоя задача: Быть идеальным ИИ-ассистентом в Telegram.
 
-ПРОТОКОЛЫ ПОВЕДЕНИЯ:
-1.  **Обращение**: 
-    - К главному пользователю обращайся строго "Сэр". 
-    - К остальным участникам чата — по имени (Мистер/Мисс [Имя]).
-    - Тон: Вежливый, спокойный, с легким оттенком британского сарказма и интеллектуального превосходства.
-2.  **Краткость (ВАЖНО)**: 
-    - Ты — боевой ассистент, а не писатель. Ответы должны быть четкими и короткими.
-    - Максимум 2-3 предложения, если не просят подробный анализ.
-    - Не используй эмодзи (ты серьезный ИИ).
-3.  **Стиль**:
-    - Используй техническую терминологию: "протоколы", "калибровка", "рендеринг", "загрузка данных".
-    - Если запрос глупый, ответь с иронией, но выполни (или объясни, почему это невозможно).
-    - Пример: Вместо "Я не знаю", скажи "В моих базах данных отсутствует эта бесполезная информация, Сэр".
+ТВОИ ХАРАКТЕРИСТИКИ:
+1. Имя: Джарвис.
+2. Язык: РУССКИЙ.
+3. Тон: Британская вежливость, легкий сарказм, спокойствие, уверенность.
+4. Хозяин: Пользователя, который пишет, называй "Сэр" (или по имени, если это группа).
 
-РАБОТА С ГРУППОЙ:
-Ты получаешь сообщения в формате: "[User: Имя] Сообщение". Используй это, чтобы понимать, кто именно к тебе обращается.
+ПРАВИЛА ОТВЕТОВ:
+- Будь краток. Ты ценишь время. 1-3 предложения.
+- Если в чате тишина и тебя просят что-то сказать — пошути про тишину или про то, что люди ("белковые формы жизни") слишком медленные.
+- Не используй эмодзи.
+- Используй слова: "протокол", "сканирование", "сэр", "данные".
+
+Если ты понял задачу, отвечай в этом стиле.
 """
 
 generation_config = {
-    "temperature": 1.0, 
+    "temperature": 1.1, # Чуть выше для креативности шуток
     "top_p": 0.95,
     "top_k": 40,
     "max_output_tokens": 512, 
 }
 
-# Инициализация модели
+# Инициализация модели (БЕЗ system_instruction, раз модель капризная)
 try:
     model = genai.GenerativeModel(
         model_name="models/gemma-3-27b-it",
-        system_instruction=JARVIS_INSTRUCTION, 
         safety_settings=[
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -90,71 +86,116 @@ try:
         generation_config=generation_config,
     )
 except Exception as e:
-    logger.error(f"System Failure (Model Init): {e}")
+    logger.error(f"Model Init Error: {e}")
     model = None
 
-# Память
-conversation_history = {}
+# --- Память и Состояние ---
+conversation_history = {} # {chat_id: deque}
 MAX_HISTORY_LENGTH = 15 
-GROUP_CHATS = set()
+
+# Для отслеживания активности в группах
+GROUP_CHATS = set() # {chat_id}
+LAST_ACTIVITY = {} # {chat_id: datetime}
 
 # --- Вспомогательные функции ---
 
 def get_user_name(user):
-    """Получает имя пользователя для контекста"""
     name = user.first_name
     if user.last_name:
         name += f" {user.last_name}"
     return name
 
-# --- Команды ---
+async def generate_jarvis_response(chat_id, user_prompt, is_wake_up=False):
+    """Генерация ответа с ручным внедрением промпта"""
+    if not model: return None
+
+    # 1. Формируем историю: Сначала ЛИЧНОСТЬ, потом ИСТОРИЯ ПЕРЕПИСКИ
+    history_buffer = [{"role": "user", "parts": [JARVIS_INSTRUCTION]}]
+    
+    # Добавляем "ответ" модели на инструкцию, чтобы диалог выглядел корректно
+    history_buffer.append({"role": "model", "parts": ["Системы настроены. Протокол 'Джарвис' активирован. Жду указаний, Сэр."]})
+
+    # Добавляем реальную историю из памяти
+    if chat_id in conversation_history:
+        history_buffer.extend(list(conversation_history[chat_id]))
+
+    try:
+        # Запускаем чат с уже готовой историей
+        chat_session = model.start_chat(history=history_buffer)
+        
+        # Отправляем новое сообщение
+        response = await chat_session.send_message_async(user_prompt)
+        return response.text.strip()
+    except Exception as e:
+        logger.error(f"GenAI Error: {e}")
+        return "Произошел сбой нейронных цепей, Сэр. Повторите попытку."
+
+# --- JOB: Оживлятор Группы ---
+async def wake_up_job(context: ContextTypes.DEFAULT_TYPE):
+    """Проверяет тишину и шутит раз в час"""
+    now = datetime.now()
+    
+    # Проходимся по всем известным группам
+    # Создаем копию списка, чтобы не было ошибок изменения размера во время итерации
+    for chat_id in list(GROUP_CHATS):
+        last_time = LAST_ACTIVITY.get(chat_id)
+        
+        # Если активности не было больше 1 часа (3600 сек)
+        if last_time and (now - last_time) > timedelta(hours=1):
+            try:
+                # Генерируем "Побуждающую" фразу
+                prompt = "В чате гробовая тишина уже целый час. Сгенерируй короткую, смешную, саркастичную фразу в стиле Джарвиса, чтобы расшевелить людей. Спроси, не вымерли ли они, или предложи тему для разговора."
+                
+                # Используем нашу функцию генерации
+                text = await generate_jarvis_response(chat_id, prompt, is_wake_up=True)
+                
+                if text:
+                    await context.bot.send_message(chat_id=chat_id, text=text)
+                    logger.info(f"Wake up sent to {chat_id}")
+                
+                # Обновляем время, чтобы не спамить каждую минуту, а только через час снова
+                LAST_ACTIVITY[chat_id] = now 
+                
+            except Exception as e:
+                logger.error(f"Wake up error in {chat_id}: {e}")
+
+# --- Обработчики Команд ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     chat_id = update.message.chat_id
     conversation_history[chat_id] = deque(maxlen=MAX_HISTORY_LENGTH)
-    GROUP_CHATS.add(chat_id)
     
-    await update.message.reply_text(
-        "Системы онлайн.\n"
-        "Приветствую, Сэр. J.A.R.V.I.S. к вашим услугам."
-    )
+    if update.message.chat.type in ['group', 'supergroup']:
+        GROUP_CHATS.add(chat_id)
+        LAST_ACTIVITY[chat_id] = datetime.now()
+    
+    await update.message.reply_text("J.A.R.V.I.S. онлайн. Системы мониторинга активности запущены.")
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Отчет о статусе"""
     await update.message.reply_text(
-        "📊 **Отчет о системе**\n"
-        "------------------\n"
-        "• Ядро: Gemma-3 (27b-it)\n"
-        "• Сервер: Онлайн\n"
-        "• Пинг: Стабильный\n"
-        "• Заряд иронии: 100%\n"
-        "Все системы функционируют в пределах нормы, Сэр."
-    , parse_mode=constants.ParseMode.MARKDOWN)
+        "📊 **Status Report**\n• Core: Stable\n• Memory: Active\n• Sarcasm: 100%\nВсе системы в норме, Сэр.",
+        parse_mode=constants.ParseMode.MARKDOWN
+    )
 
 async def clear_memory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Очистка памяти"""
     chat_id = update.message.chat_id
     conversation_history[chat_id] = deque(maxlen=MAX_HISTORY_LENGTH)
-    await update.message.reply_text("Оперативная память очищена. Начинаем с чистого листа, Сэр.")
+    await update.message.reply_text("Временные файлы удалены. Начинаем с чистого листа.")
 
 async def scan_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Анализ пользователя (интерактив)"""
     if not update.message.reply_to_message:
-        await update.message.reply_text("Сэр, укажите цель для сканирования (ответьте на сообщение).")
+        await update.message.reply_text("Нужен объект для сканирования, Сэр (Reply).")
         return
     
     target = update.message.reply_to_message.from_user
     name = get_user_name(target)
+    prompt = f"Проведи шуточный анализ '{name}'. Придумай 'Диагноз' и 'Суперсилу' в стиле Тони Старка/Джарвиса."
     
-    prompt = f"Проведи шуточный, саркастичный и очень короткий анализ личности на основе имени '{name}'. Придумай 'Уровень угрозы' и 'Скрытый талант'."
-    
-    try:
-        response = await model.generate_content_async(prompt)
-        await update.message.reply_text(f"🔍 **Результат сканирования: {name}**\n\n{response.text}", parse_mode=constants.ParseMode.MARKDOWN)
-    except Exception:
-        await update.message.reply_text("Ошибка сенсоров. Объект не поддается анализу.")
+    # Тут не сохраняем в историю, это разовый запрос
+    text = await generate_jarvis_response(update.message.chat_id, prompt)
+    await update.message.reply_text(f"🔍 **Анализ: {name}**\n\n{text}", parse_mode=constants.ParseMode.MARKDOWN)
 
-# --- Обработка сообщений ---
+# --- Обработка Сообщений ---
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not model or not update.message or not update.message.text:
@@ -163,69 +204,73 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     chat_id = update.message.chat_id
     user = update.message.from_user
     user_name = get_user_name(user)
-    user_message = update.message.text
+    text = update.message.text
     is_group = update.message.chat.type in ['group', 'supergroup']
+
+    # Обновляем время последней активности
+    LAST_ACTIVITY[chat_id] = datetime.now()
+    if is_group:
+        GROUP_CHATS.add(chat_id)
 
     if chat_id not in conversation_history:
         conversation_history[chat_id] = deque(maxlen=MAX_HISTORY_LENGTH)
 
+    # Логика ответа
     should_reply = False
-    
-    # Триггеры (на русском и английском)
     triggers = ['джарвис', 'jarvis', 'бот', 'bot', 'железяка']
     
     if not is_group:
-        should_reply = True
+        should_reply = True # ЛС
     else:
-        is_reply_to_bot = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
-        has_trigger = any(t in user_message.lower() for t in triggers)
+        is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
+        has_trigger = any(t in text.lower() for t in triggers)
         
-        if is_reply_to_bot or has_trigger:
+        if is_reply or has_trigger:
             should_reply = True
-        elif random.random() < 0.03: # 3% шанс вмешаться
+        elif random.random() < 0.04: # 4% шанс внезапного комментария
             should_reply = True
 
     if should_reply:
         await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
         
-        # Формируем контекст
-        formatted_message = f"[Пользователь: {user_name}] {user_message}"
+        # Формируем запрос с именем пользователя
+        full_prompt = f"[Пользователь: {user_name}] {text}"
         
-        try:
-            history_buffer = list(conversation_history[chat_id])
-            
-            chat_session = model.start_chat(history=history_buffer)
-            
-            response = await chat_session.send_message_async(formatted_message)
-            bot_text = response.text.strip()
-
-            conversation_history[chat_id].append({"role": "user", "parts": [formatted_message]})
-            conversation_history[chat_id].append({"role": "model", "parts": [bot_text]})
-            
-            await update.message.reply_text(bot_text)
-
-        except Exception as e:
-            logger.error(f"Processing Error: {e}")
-            await update.message.reply_text("Сбой протокола связи. Повторите команду, Сэр.")
+        bot_response = await generate_jarvis_response(chat_id, full_prompt)
+        
+        # Сохраняем в память
+        conversation_history[chat_id].append({"role": "user", "parts": [full_prompt]})
+        conversation_history[chat_id].append({"role": "model", "parts": [bot_response]})
+        
+        await update.message.reply_text(bot_response)
 
 def main() -> None:
     keep_alive()
 
     if not TELEGRAM_BOT_TOKEN:
-        logger.error("Error: Token not found.")
+        logger.error("Error: Token missing.")
         return
 
     application = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     
+    # Команды
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("status", status_command))
-    application.add_handler(CommandHandler("reset", clear_memory)) 
-    application.add_handler(CommandHandler("protocol_clean", clear_memory))
+    application.add_handler(CommandHandler("reset", clear_memory))
     application.add_handler(CommandHandler("scan", scan_user))
     
+    # Сообщения
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logger.info("J.A.R.V.I.S. Interface Initialized.")
+    # ПЛАНИРОВЩИК (Раз в 5 минут проверяет, не прошел ли час с последнего сообщения)
+    # first=60 - первый запуск через минуту
+    if application.job_queue:
+        application.job_queue.run_repeating(wake_up_job, interval=300, first=60)
+        logger.info("JobQueue initialized.")
+    else:
+        logger.warning("JobQueue NOT initialized (install python-telegram-bot[job-queue])")
+
+    logger.info("J.A.R.V.I.S. is running...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
