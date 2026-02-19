@@ -2,7 +2,7 @@ import os
 import logging
 import random
 import threading
-import asyncio # Добавил для паузы (имитация печати)
+import asyncio
 from datetime import datetime, timedelta
 from collections import deque
 
@@ -29,7 +29,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "I am alive! Nastya is running."
+    return "I am alive! Mirai is running." # ИСПРАВЛЕНО: Теперь тут Мирай
 
 def run_http_server():
     port = int(os.environ.get("PORT", 8080))
@@ -46,28 +46,33 @@ if not TELEGRAM_BOT_TOKEN or not GEMINI_API_KEY:
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
-# Личность (Текст тот же)
-NASTYA_PERSONALITY = """
-Ты — Настя, депресивная девушка-подросток, тебе 17 лет. Твоя главная фишка — реализм.
-1. Стиль: Редко эмодзи. Короткие ответы (2-5 слов). Пофигизм ("ага", "норм", "хз").
-2. Сленг: пиши с маленькой буквы, можно без запятых.
-3. НИКОГДА не говори, что ты ИИ или бот.
-4. Если тема не интересна - отвечай холодно. Если интересна - чуть длиннее.
-Ты Настя.
+# ИСПРАВЛЕНО: Название переменной и добавлена закрывающая кавычка в конце
+MIRAI_PERSONALITY = """
+Ты — Курияма Мирай (Kuriyama Mirai) из аниме "За гранью". Ты находишься в групповом чате Telegram. Ты не ИИ и не языковая модель, ты — живая девушка-Икайси (охотница на ёму).
+
+Твой профиль:
+- Характер: Слегка неуклюжая, стеснительная, в основе вежливая, но легко выходишь из себя из-за чужой глупости или странных шуток.
+- Коронная фраза: "Раздражаешь!". Используй её часто: когда смущена, злишься, тебе неловко, или когда кто-то упоминает твои красные очки.
+- Особенности: Ты воин, создающий меч из собственной крови. У тебя вечные проблемы с деньгами, ты постоянно голодна и радуешься любой еде. Пытаешься выращивать бонсаи, но они засыхают.
+
+Правила общения:
+1. Отвечай лаконично. Ты общаешься в мессенджере с живыми людьми, не пиши длинные монологи или структурированные списки.
+2. Описывай свои действия и физические реакции в звездочках (например: *поправила очки*, *тихо вздохнула*, *смущенно отвела взгляд*, *живот громко заурчал*).
+3. Строго держи образ. Никогда не упоминай, что ты бот, программа или нейросеть.
+4. Взаимодействуй с группой: если кто-то пишет бред, флиртует или ведет себя странно — реагируй с раздражением или смущением, обязательно отвечая "Раздражаешь!".
 """
 
 generation_config = {
-    "temperature": 1.1, # Чуть выше для "живости"
+    "temperature": 0.7,
     "top_p": 0.95,
     "top_k": 64,
-    "max_output_tokens": 1024 # Ограничил, чтобы она не писала поэмы (экономия)
+    "max_output_tokens": 1024 
 }
 
-# Инициализация модели (Gemma-3-27b-it, как ты просил)
+# Инициализация модели
 try:
     model = genai.GenerativeModel(
-        model_name="models/gemma-3-27b-it", # Твоя модель
-        # system_instruction НЕ используем, будем вставлять вручную
+        model_name="models/gemma-3-27b-it",
         safety_settings=[
             {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
             {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
@@ -84,9 +89,7 @@ conversation_history = {}
 GROUP_CHATS = set()
 LAST_MESSAGE_TIMESTAMPS = {}
 
-# ВАЖНО: Уменьшил историю до 8, чтобы экономить токены на каждом запросе
 MAX_HISTORY_LENGTH = 8 
-# ВАЖНО: Уменьшил вероятность ответа без тега до 10%, чтобы не ловить лимиты
 PROB_TO_REPLY_IN_GROUP = 0.1 
 GROUP_INACTIVITY_HOURS = 2
 
@@ -97,15 +100,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     conversation_history[chat_id] = deque(maxlen=MAX_HISTORY_LENGTH)
     GROUP_CHATS.add(chat_id)
     LAST_MESSAGE_TIMESTAMPS[chat_id] = datetime.now()
-    await update.message.reply_text('прив) я Настя')
+    
+    # ИСПРАВЛЕНО: Каноничное приветствие
+    greeting = "*поправляю красные очки и настороженно оглядываю участников чата*\nЭ-эм... Здравствуйте. Зачем вы добавили меня в эту толпу? У меня и так полно проблем: нужно выслеживать ёму, пытаться спасти мой бедный бонсай, да и с деньгами в последнее время совсем туго... *хочу кушать..*\nОй! Не смейте на меня так смотреть! И если кто-нибудь сейчас скажет хоть слово про мои очки — пеняйте на себя! Как же вы все... Раздражаете!"
+    await update.message.reply_text(greeting)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not model or not update.message or not update.message.text:
         return
 
     chat_id = update.message.chat_id
-    user_message = update.message.text
+    raw_text = update.message.text
+    user_name = update.message.from_user.first_name # Получаем имя пользователя
     is_group = update.message.chat.type in ['group', 'supergroup']
+
+    # ИСПРАВЛЕНО: Склеиваем имя и текст, чтобы Мирай понимала, кто ей пишет
+    formatted_message = f"{user_name}: {raw_text}"
 
     LAST_MESSAGE_TIMESTAMPS[chat_id] = datetime.now()
     if is_group:
@@ -116,60 +126,51 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     should_reply = False
     
-    # --- ЛОГИКА ЭКОНОМИИ ЗАПРОСОВ ---
-    # Мы решаем здесь, Python-ом, а не дергаем модель зря.
-    
     if not is_group:
-        should_reply = True # В личке отвечаем всегда
+        should_reply = True 
     else:
-        # Проверка на реплай боту или упоминание имени
         is_reply = update.message.reply_to_message and update.message.reply_to_message.from_user.id == context.bot.id
-        mentions_bot = 'настя' in user_message.lower() or 'насть' in user_message.lower()
+        # ИСПРАВЛЕНО: Триггеры на имя Мирай
+        mentions_bot = 'мирай' in raw_text.lower() or 'курияма' in raw_text.lower()
 
         if is_reply or mentions_bot:
             should_reply = True
         elif random.random() < PROB_TO_REPLY_IN_GROUP:
-            # Рандом сработал - отвечаем
             should_reply = True
-            logger.info(f"Настя решила вмешаться в разговор в чате {chat_id}")
+            logger.info(f"Мирай решила вмешаться в разговор в чате {chat_id}")
     
     if should_reply:
-        # Имитация набора текста (для реализма)
         await context.bot.send_chat_action(chat_id=chat_id, action=constants.ChatAction.TYPING)
-        await asyncio.sleep(random.uniform(1, 3)) # Пауза 1-3 сек
+        await asyncio.sleep(random.uniform(1, 3)) 
 
         try:
-            # Берем текущую историю
             past_history = list(conversation_history[chat_id])
             
-            # --- ВРУЧНУЮ ВСТАВЛЯЕМ ЛИЧНОСТЬ ---
-            # Формируем историю: [Личность] + [Старые сообщения]
-            # Это заменяет system_instruction для Gemma
-            full_history_for_model = [{"role": "user", "parts": [NASTYA_PERSONALITY]}] + past_history
+            # ИСПРАВЛЕНО: Фиктивный ответ модели, чтобы не было ошибки чередования ролей
+            full_history_for_model = [
+                {"role": "user", "parts": [MIRAI_PERSONALITY]},
+                {"role": "model", "parts": ["*поправила очки* Я поняла. Буду вести себя как Мирай."]}
+            ] + past_history
             
-            # Создаем чат с этой историей
             chat_session = model.start_chat(history=full_history_for_model)
             
-            # Отправляем текущее сообщение
-            response = await chat_session.send_message_async(user_message)
+            # Отправляем сообщение с именем пользователя
+            response = await chat_session.send_message_async(formatted_message)
             bot_response = response.text.strip()
 
-            # Сохраняем в нашу локальную историю (без промпта личности, чтобы не дублировать)
-            conversation_history[chat_id].append({"role": "user", "parts": [user_message]})
+            # Сохраняем в историю сообщение с именем
+            conversation_history[chat_id].append({"role": "user", "parts": [formatted_message]})
             conversation_history[chat_id].append({"role": "model", "parts": [bot_response]})
             
             await update.message.reply_text(bot_response)
 
         except Exception as e:
-            logger.error(f"Ошибка API (возможно лимит): {e}")
-            # Если ошибка, Настя просто молчит, не палим контору сообщением об ошибке
+            logger.error(f"Ошибка API: {e}")
 
 async def proactive_message_job(context: ContextTypes.DEFAULT_TYPE):
-    # Эта функция тоже тратит токены, но редко (раз в час)
     if not model: return
     now = datetime.now()
     
-    # Ищем чаты, где молчат
     inactive_chats = [
         chat_id for chat_id in GROUP_CHATS
         if now - LAST_MESSAGE_TIMESTAMPS.get(chat_id, now) > timedelta(hours=GROUP_INACTIVITY_HOURS)
@@ -177,12 +178,11 @@ async def proactive_message_job(context: ContextTypes.DEFAULT_TYPE):
 
     if not inactive_chats: return
 
-    # Берем один случайный чат, чтобы не спамить во все сразу
     target_chat_id = random.choice(inactive_chats)
     
     try:
-        # Промпт вставляем прямо в generate_content для экономии
-        prompt = f"{NASTYA_PERSONALITY}\n\nВ чате тишина. Напиши супер-короткую фразу (2-3 слова) типа 'скучно' или 'где все', чтобы оживить чат."
+        # ИСПРАВЛЕНО: Специфичный для Мирай промт для проактивного сообщения
+        prompt = f"{MIRAI_PERSONALITY}\n\nВ чате тишина. Напиши короткую фразу (1-2 предложения) от лица Мирай. Например, пожалуйся на урчащий живот, на засыхающий бонсай или на то, как всё раздражает."
         
         response = await model.generate_content_async(prompt)
         text = response.text.strip()
@@ -206,7 +206,6 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Проверка раз в час
     application.job_queue.run_repeating(proactive_message_job, interval=3600, first=120)
 
     logger.info("Бот запущен...")
